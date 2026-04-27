@@ -16,6 +16,10 @@ service cloud.firestore {
       return isSignedIn() && (data.ownerEmail == request.auth.token.email);
     }
 
+    function isOwner() {
+      return isSignedIn();
+    }
+
     function isValidId(id) {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }

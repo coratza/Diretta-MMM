@@ -221,8 +221,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         try {
           console.log("[SYNC] Recupero ottimizzato righe e fatti...");
           // READ CHUNKS & PERFORMANCE FACTS IN PARALLEL filtered by owner
-          const qChunks = query(collection(db, "dataChunks"), where("ownerEmail", "==", user.email));
-          const qPerf = query(collection(db, "performanceFacts"), where("ownerEmail", "==", user.email));
+          const qChunks = query(
+            collection(db, "dataChunks"), 
+            where("ownerEmail", "==", user.email)
+          );
+          const qPerf = query(
+            collection(db, "performanceFacts"), 
+            where("ownerEmail", "==", user.email)
+          );
 
           const [chunkSnapshot, perfSnapshot] = await Promise.all([
             getDocs(qChunks),
@@ -236,49 +242,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               allRows.push(...data.rows);
             }
           });
-          console.log(`[SYNC] Recuperate ${allRows.length} righe da ${chunkSnapshot.size} chunk.`);
           
           const allPerf = perfSnapshot.docs.map(d => d.data() as PerformanceFact);
-          console.log(`[SYNC] Recuperati ${allPerf.length} fatti di performance.`);
-
-          // Save to cache
-          localStorage.setItem("mdf_cache_rows", JSON.stringify(allRows));
-          localStorage.setItem("mdf_cache_perf", JSON.stringify(allPerf));
           
           dispatch({ type: "SET_CLEANED_ROWS", payload: allRows });
           dispatch({ type: "SET_PERFORMANCE_FACTS", payload: allPerf });
-        } catch (err: unknown) {
-          const error = err as any;
-          if (error.message?.includes("Quota exceeded") || error.code === "resource-exhausted") {
-            dispatch({ type: "SET_QUOTA_EXCEEDED", payload: true });
-            
-            // Try to load from cache
-            const cachedRows = localStorage.getItem("mdf_cache_rows");
-            const cachedPerf = localStorage.getItem("mdf_cache_perf");
-            if (cachedRows) {
-              try {
-                const rows = JSON.parse(cachedRows);
-                dispatch({ type: "SET_CLEANED_ROWS", payload: rows });
-              } catch (e) {
-                console.warn("[CACHE] Error parsing cached rows", e);
-              }
-            }
-            if (cachedPerf) {
-              try {
-                const perf = JSON.parse(cachedPerf);
-                dispatch({ type: "SET_PERFORMANCE_FACTS", payload: perf });
-              } catch (e) {
-                console.warn("[CACHE] Error parsing cached facts", e);
-              }
-            }
-          }
-          console.error("[SYNC ERRORE] Fetch iniziale righe/perf:", err);
+        } catch (err: any) {
+          console.error("[SYNC ERRORE] Fetch data:", err);
+          dispatch({ type: "SET_PROCESSING", payload: false });
         }
       };
 
       fetchInitialData();
-
-      // Clean up snapshot listener on logout or effect re-run
       return () => unsubImports();
     });
 
@@ -286,18 +261,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const uploadFile = useCallback(async (file: File) => {
+    const userEmail = auth.currentUser?.email;
+    if (!userEmail) {
+      alert("Operazione non autorizzata: utente non loggato.");
+      return;
+    }
+
     dispatch({ type: "SET_PROCESSING", payload: true });
     try {
       const sheets = await parseWorkbook(file);
       const importId = `imp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
       
-      // Determine file type based on headers
       const firstSheetRows = sheets[0]?.rows || [];
       const fileType = detectFileType(firstSheetRows);
-      console.log(`[PROCESS] Tipo file rilevato: ${fileType}`);
-
-      const userEmail = auth.currentUser?.email;
-      if (!userEmail) throw new Error("Utente non autenticato");
+      
+      if (fileType === "unknown") {
+        alert("Formato file non riconosciuto. Assicurati che le intestazioni siano corrette.");
+        return;
+      }
 
       if (fileType === "standard") {
         let allCleaned: CleanedRow[] = [];
@@ -319,33 +300,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         await setDoc(doc(db, "imports", importId), importData);
         
-        const CHAR_LIMIT_APPROX = 800000;
-        const chunks: CleanedRow[][] = [];
-        let currentChunk: CleanedRow[] = [];
-        let currentSize = 0;
-        for (const row of allCleaned) {
-          const rowSize = JSON.stringify(row).length;
-          if (currentSize + rowSize > CHAR_LIMIT_APPROX || currentChunk.length >= 500) {
-            chunks.push(currentChunk);
-            currentChunk = [];
-            currentSize = 0;
-          }
-          currentChunk.push(row);
-          currentSize += rowSize;
-        }
-        if (currentChunk.length > 0) chunks.push(currentChunk);
-        const uploadPromises = chunks.map((chunk, index) => {
-          const chunkId = `${importId}-chunk-${index}`;
-          return setDoc(doc(db, "dataChunks", chunkId), {
+        const CHUNK_SIZE = 500;
+        const uploadPromises = [];
+        for (let i = 0; i < allCleaned.length; i += CHUNK_SIZE) {
+          const chunk = allCleaned.slice(i, i + CHUNK_SIZE);
+          const chunkId = `${importId}-c-${i / CHUNK_SIZE}`;
+          uploadPromises.push(setDoc(doc(db, "dataChunks", chunkId), {
             importId,
             rows: chunk,
-            chunkIndex: index,
-            count: chunk.length,
             ownerEmail: userEmail,
-          });
-        });
+          }));
+        }
         await Promise.all(uploadPromises);
-      } else if (fileType === "performance") {
+      } else {
         let allFacts: PerformanceFact[] = [];
         for (const sheet of sheets) {
           const result = processPerformanceSheet(sheet, importId);
@@ -372,84 +339,88 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           });
         });
         await Promise.all(uploadPromises);
-      } else {
-        alert("Formato file non riconosciuto. Verifica le intestazioni.");
-        throw new Error("Unknown file format");
       }
-
-      console.log(`[PROCESS] Import completato per: ${importId}`);
-    } catch (e) {
+    } catch (e: any) {
+      console.error("[UPLOAD ERROR]", e);
+      alert(`Errore caricamento: ${e.message}`);
+    } finally {
       dispatch({ type: "SET_PROCESSING", payload: false });
-      console.error("Upload error:", e);
-      throw e;
     }
   }, []);
 
   const removeImport = useCallback(async (importId: string) => {
-    if (!confirm("Eliminare definitivamente questo file e tutti i dati associati?")) return;
+    if (!confirm("Eliminare definitivamente questo file?")) return;
     
+    const userEmail = auth.currentUser?.email;
+    if (!userEmail) return;
+
     dispatch({ type: "SET_PROCESSING", payload: true });
     try {
-      console.log(`[PROCESS] Avvio rimozione atomica import: ${importId}`);
-      
-      // 1. Mark as deleting in UI (metadata update instead of delete first)
+      // 1. Mark status
       await setDoc(doc(db, "imports", importId), { status: "deleting" }, { merge: true });
 
-      // 2. Find and Delete associated Mega-Chunks
-      const chunkQ = query(collection(db, "dataChunks"), where("importId", "==", importId));
+      // 2. Delete chunks
+      const chunkQ = query(
+        collection(db, "dataChunks"), 
+        where("importId", "==", importId),
+        where("ownerEmail", "==", userEmail)
+      );
       const chunkSnapshot = await getDocs(chunkQ);
       const chunkPromises = chunkSnapshot.docs.map(d => deleteDoc(d.ref));
       
-      // 3. Find and Delete associated Performance Facts
-      const perfQ = query(collection(db, "performanceFacts"), where("importId", "==", importId));
+      // 3. Delete facts
+      const perfQ = query(
+        collection(db, "performanceFacts"), 
+        where("importId", "==", importId),
+        where("ownerEmail", "==", userEmail)
+      );
       const perfSnapshot = await getDocs(perfQ);
       const perfPromises = perfSnapshot.docs.map(d => deleteDoc(d.ref));
 
       await Promise.all([...chunkPromises, ...perfPromises]);
-      console.log(`[PROCESS] Eliminati ${chunkSnapshot.size} chunk e ${perfSnapshot.size} fatti performance.`);
 
-      // 4. Finally delete the metadata
+      // 4. Metadata
       await deleteDoc(doc(db, "imports", importId));
-      console.log("[PROCESS] Import rimosso completamente.");
-
-      alert("File rimosso correttamente.");
-    } catch (e: unknown) {
-      const error = e as Error;
-      console.error("[ERRORE] In fase di rimozione:", error);
-      alert(`Errore nella rimozione: ${error.message}`);
+    } catch (e: any) {
+      console.error("[REMOVE ERROR]", e);
+      alert(`Errore rimozione: ${e.message}`);
     } finally {
       dispatch({ type: "SET_PROCESSING", payload: false });
     }
   }, []);
 
   const clearAll = useCallback(async () => {
-    if (!confirm("RESET TOTALE: Sei sicuro di voler cancellare TUTTI i dati?")) return;
+    if (!confirm("ATTENZIONE: Cancellare TUTTI i tuoi dati?")) return;
     
+    const userEmail = auth.currentUser?.email;
+    if (!userEmail) return;
+
     dispatch({ type: "SET_PROCESSING", payload: true });
     try {
-      // 1. Delete Imports
-      const impSnapshot = await getDocs(collection(db, "imports"));
-      const impPromises = impSnapshot.docs.map(d => deleteDoc(d.ref));
+      const qImp = query(collection(db, "imports"), where("ownerEmail", "==", userEmail));
+      const qChu = query(collection(db, "dataChunks"), where("ownerEmail", "==", userEmail));
+      const qPer = query(collection(db, "performanceFacts"), where("ownerEmail", "==", userEmail));
+
+      const [sImp, sChu, sPer] = await Promise.all([
+        getDocs(qImp),
+        getDocs(qChu),
+        getDocs(qPer)
+      ]);
+
+      const pImp = sImp.docs.map(d => deleteDoc(d.ref));
+      const pChu = sChu.docs.map(d => deleteDoc(d.ref));
+      const pPer = sPer.docs.map(d => deleteDoc(d.ref));
       
-      // 2. Delete Chunks
-      const chunkSnapshot = await getDocs(collection(db, "dataChunks"));
-      const chunkPromises = chunkSnapshot.docs.map(d => deleteDoc(d.ref));
-      
-      // 3. Delete Performance Facts
-      const perfSnapshot = await getDocs(collection(db, "performanceFacts"));
-      const perfPromises = perfSnapshot.docs.map(d => deleteDoc(d.ref));
-      
-      await Promise.all([...impPromises, ...chunkPromises, ...perfPromises]);
+      await Promise.all([...pImp, ...pChu, ...pPer]);
       
       localStorage.removeItem("mdf_cache_rows");
       localStorage.removeItem("mdf_cache_perf");
       localStorage.removeItem("mdf_cache_imports");
       
       dispatch({ type: "CLEAR_ALL" });
-      alert("Database ripulito con successo.");
-    } catch (e: unknown) {
-      console.error("[ERRORE] Reset totale:", e);
-      alert("Errore durante il reset.");
+    } catch (e: any) {
+      console.error("[CLEAR ALL ERROR]", e);
+      alert("Errore durante la pulizia totale.");
     } finally {
       dispatch({ type: "SET_PROCESSING", payload: false });
     }

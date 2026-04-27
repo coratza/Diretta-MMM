@@ -19,7 +19,8 @@ export default function Index() {
   const { state, clearAll } = useAppContext();
   const hasSalesData = state.cleanedRows.length > 0;
   const hasPerfData = state.performanceFacts.length > 0;
-  const hasAnyData = hasSalesData || hasPerfData;
+  const hasImports = state.imports.length > 0;
+  const hasAnyData = hasSalesData || hasPerfData || hasImports;
 
   return (
     <div className="min-h-screen bg-background">

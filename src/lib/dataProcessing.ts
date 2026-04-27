@@ -81,17 +81,19 @@ export function getProductType(
 // === Column Name Normalization ===
 
 const COLUMN_ALIASES: Record<string, string[]> = {
-  projectName: ["project - name", "project name", "projectname", "project_name"],
+  projectName: ["project - name", "project name", "projectname", "project_name", "progetto"],
   month: ["product acquisition - month", "product acquisition month", "month", "mese"],
   day: ["product acquisition - day", "product acquisition day", "day", "giorno"],
+  date: ["date", "data", "giorno acquisizione"],
   promotionActionName: [
     "promotion action - name",
     "promotion action name",
     "promotionactionname",
     "promotion_action_name",
+    "azione promozionale"
   ],
-  webCodeEcom: ["web code ecom", "webcodeecom", "web_code_ecom", "web code"],
-  valuesNet: ["values net", "valuesnet", "values_net", "net values", "soci", "net"],
+  webCodeEcom: ["web code ecom", "webcodeecom", "web_code_ecom", "web code", "codice web"],
+  valuesNet: ["values net", "valuesnet", "values_net", "net values", "soci", "net", "vendite"],
 };
 
 const PERFORMANCE_ALIASES: Record<string, string[]> = {
@@ -454,8 +456,17 @@ export function processSheet(
     const totalCheck = isTotalRow(row);
 
     const projectName = cleanString(row.projectName);
-    const month = parseNumeric(row.month);
-    const day = parseNumeric(row.day);
+    let month = parseNumeric(row.month);
+    let day = parseNumeric(row.day);
+    const dateCol = parseExcelDate(row.date);
+    
+    if (dateCol && (month == null || day == null)) {
+      const d = new Date(dateCol);
+      month = d.getMonth() + 1;
+      day = d.getDate();
+      if (year == null) year = d.getFullYear();
+    }
+    
     const promotionActionName = cleanString(row.promotionActionName);
     const webCodeEcom = cleanString(row.webCodeEcom);
     const soci = parseNumeric(row.valuesNet);
