@@ -1,0 +1,75 @@
+{
+  "entities": {
+    "ImportMetadata": {
+      "title": "Import Metadata",
+      "description": "Metadata about an uploaded Excel file",
+      "type": "object",
+      "properties": {
+        "importId": { "type": "string" },
+        "fileName": { "type": "string" },
+        "uploadedAt": { "type": "string", "format": "date-time" },
+        "fileType": { "type": "string" },
+        "sheetCount": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "processing", "completed", "error"] },
+        "rowCount": { "type": "number" }
+      },
+      "required": ["importId", "fileName", "uploadedAt", "status"]
+    },
+    "CleanedRow": {
+      "title": "Cleaned Row",
+      "description": "A single processed row from an Excel file",
+      "type": "object",
+      "properties": {
+        "cleanRowId": { "type": "string" },
+        "importId": { "type": "string" },
+        "sourceFile": { "type": "string" },
+        "sourceSheet": { "type": "string" },
+        "sourceRowIndex": { "type": "number" },
+        "projectName": { "type": "string" },
+        "date": { "type": "string" },
+        "channelLabel": { "type": "string" },
+        "funnelFlow": { "type": "string" },
+        "productType": { "type": "string" },
+        "soci": { "type": "number" },
+        "dataQualityStatus": { "type": "string" }
+      },
+      "required": ["cleanRowId", "importId", "date"]
+    },
+    "PerformanceFact": {
+      "title": "Performance Fact",
+      "description": "Daily aggregated metrics for Cart Rec and CTC",
+      "type": "object",
+      "properties": {
+        "factId": { "type": "string" },
+        "importId": { "type": "string" },
+        "sourceFile": { "type": "string" },
+        "date": { "type": "string" },
+        "sociCartRec": { "type": "number" },
+        "sociCtc": { "type": "number" },
+        "chiamateCartRec": { "type": "number" },
+        "chiamateCtc": { "type": "number" },
+        "redCartRec": { "type": "number" },
+        "redCtc": { "type": "number" }
+      },
+      "required": ["factId", "importId", "date"]
+    }
+  },
+  "firestore": {
+    "/imports/{importId}": {
+      "schema": "ImportMetadata",
+      "description": "Collection of file import metadata"
+    },
+    "/cleanedRows/{rowId}": {
+      "schema": "CleanedRow",
+      "description": "Collection of all processed data rows"
+    },
+    "/performanceFacts/{factId}": {
+      "schema": "PerformanceFact",
+      "description": "Collection of daily performance metrics"
+    },
+    "/dataChunks/{chunkId}": {
+      "schema": "object",
+      "description": "Collection of chunked data for efficient transport"
+    }
+  }
+}

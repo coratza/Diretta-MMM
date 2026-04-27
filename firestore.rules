@@ -1,0 +1,82 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 0. Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Phase 3: Primitives
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isDataOwner(data) {
+      return isSignedIn() && (data.ownerEmail == request.auth.token.email);
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Validators
+    function isValidImport(data) {
+      return data.importId is string && data.importId.size() > 0 &&
+             data.fileName is string && data.fileName.size() < 512 &&
+             data.ownerEmail == request.auth.token.email;
+    }
+
+    function isValidChunk(data) {
+      return data.importId is string && data.importId.size() > 0 &&
+             data.rows is list && data.rows.size() <= 600 &&
+             data.ownerEmail == request.auth.token.email;
+    }
+
+    function isValidPerformanceFact(data) {
+      return data.factId is string && data.importId is string &&
+             data.date is string && data.date.size() == 10 &&
+             data.ownerEmail == request.auth.token.email;
+    }
+
+    // 1. Imports
+    match /imports/{importId} {
+      allow list, get: if isDataOwner(existing());
+      allow create: if isSignedIn() && isValidId(importId) && isValidImport(incoming());
+      allow update: if isDataOwner(existing()) && (
+        // Allow updating status to 'deleting'
+        incoming().diff(resource.data).affectedKeys().hasOnly(['status']) &&
+        incoming().status == 'deleting'
+      );
+      allow delete: if isDataOwner(existing());
+    }
+
+    // 2. Data Chunks (Mega-Chunks)
+    match /dataChunks/{chunkId} {
+      allow list, get: if isDataOwner(existing());
+      allow create: if isSignedIn() && isValidId(chunkId) && isValidChunk(incoming());
+      allow delete: if isDataOwner(existing());
+    }
+
+    // 3. Performance Facts (MMM)
+    match /performanceFacts/{factId} {
+      allow list, get: if isDataOwner(existing());
+      allow create: if isSignedIn() && isValidId(factId) && isValidPerformanceFact(incoming());
+      allow delete: if isDataOwner(existing());
+    }
+
+    // Legacy support for cleanedRows if any still exist
+    match /cleanedRows/{rowId} {
+      allow read, delete: if isSignedIn();
+      allow create: if isOwner() && incoming().importId is string;
+    }
+  }
+}
